@@ -1,8 +1,0 @@
-2025-10-23 16:56:49 [INFO] main.py:552 - Logging initialized
-2025-10-23 16:56:49 [DEBUG] main.py:553 - Python version: 3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]
-2025-10-23 16:56:49 [DEBUG] main.py:554 - OS: nt
-2025-10-23 16:56:49 [DEBUG] main.py:555 - Working directory: C:\Users\Даниил\Documents\GitHub\KingzVPN
-2025-10-23 17:10:25 [INFO] main.py:552 - Logging initialized
-2025-10-23 17:10:25 [DEBUG] main.py:553 - Python version: 3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]
-2025-10-23 17:10:25 [DEBUG] main.py:554 - OS: nt
-2025-10-23 17:10:25 [DEBUG] main.py:555 - Working directory: C:\Users\Даниил\Documents\GitHub\KingzVPN
