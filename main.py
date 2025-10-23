@@ -400,7 +400,6 @@ class BeautifulVPN:
             if 'data_used' in self.stat_value_labels:
                 self.stat_value_labels['data_used'].configure(text=f"{self.stats['data_used']}GB")
         except Exception:
-            # не критично, укусим любые ошибки и продолжим
             pass
         
     def create_ui(self):
@@ -411,9 +410,9 @@ class BeautifulVPN:
         self.create_stats_section()
         
     def run(self):
-        self.app.mainloop()
+            self.app.mainloop()
 
-# Запуск приложения
+    # Запуск приложения
 if __name__ == "__main__":
     vpn_app = BeautifulVPN()
     vpn_app.run()
