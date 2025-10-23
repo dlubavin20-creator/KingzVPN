@@ -1,3 +1,305 @@
+import sys
+import os
+import subprocess
+import importlib
+import platform
+import time
+from pathlib import Path
+
+# ===== IMPROVED DEPENDENCY INSTALLATION SYSTEM =====
+class DependencyManager:
+    def __init__(self):
+        # Updated package list - removed problematic packages
+        self.required_packages = {
+            'customtkinter': 'customtkinter',
+            'requests': 'requests', 
+            'urllib3': 'urllib3',
+            'psutil': 'psutil',
+            'pillow': 'PIL',
+            'speedtest-cli': 'speedtest',
+            'ping3': 'ping3',
+            'python-nmap': 'nmap',
+            'pycryptodome': 'Crypto',
+            'cryptography': 'cryptography',
+            'qrcode': 'qrcode',
+            'pyperclip': 'pyperclip',
+            'netifaces': 'netifaces',
+        }
+        
+        # Platform-specific packages
+        self.windows_packages = {
+            'pywin32': 'win32clipboard'
+        }
+        
+        self.optional_packages = {
+            'ifaddr': 'ifaddr',
+            'scapy': 'scapy',
+            'dnspython': 'dns',
+            'aiohttp': 'aiohttp',
+        }
+        
+        self.install_log = []
+        
+    def check_system_requirements(self):
+        """Check system compatibility"""
+        system = platform.system()
+        version = platform.python_version()
+        
+        print(f"System: {system}")
+        print(f"Python: {version}")
+        
+        if system not in ['Windows', 'Linux', 'Darwin']:
+            print("⚠️  Warning: Unsupported operating system")
+            
+        # Check Python version
+        python_version = tuple(map(int, version.split('.')[:2]))
+        if python_version < (3, 7):
+            print("❌ Error: Python 3.7 or higher required")
+            return False
+            
+        return True
+    
+    def is_package_installed(self, package_name):
+        """Check if package is installed using importlib"""
+        try:
+            if package_name in self.required_packages:
+                import_name = self.required_packages[package_name]
+            elif package_name in self.windows_packages:
+                import_name = self.windows_packages[package_name]
+            elif package_name in self.optional_packages:
+                import_name = self.optional_packages[package_name]
+            else:
+                import_name = package_name
+                
+            importlib.import_module(import_name)
+            return True
+        except ImportError:
+            return False
+        except Exception as e:
+            print(f"⚠️  Warning checking {package_name}: {e}")
+            return False
+    
+    def get_install_command(self):
+        """Get appropriate pip command - SIMPLIFIED"""
+        # Try the most common commands
+        commands_to_try = [
+            [sys.executable, '-m', 'pip'],
+            ['pip3'],
+            ['pip']
+        ]
+        
+        for cmd in commands_to_try:
+            try:
+                # Test if command works
+                result = subprocess.run(
+                    cmd + ['--version'], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    print(f"✅ Found pip: {' '.join(cmd)}")
+                    return cmd
+            except (subprocess.SubprocessError, FileNotFoundError):
+                continue
+                
+        print("❌ Could not find pip command")
+        return None
+    
+    def install_package(self, package, upgrade=False, user=False, timeout=120):
+        """Install a single package with better error handling"""
+        pip_cmd = self.get_install_command()
+        if not pip_cmd:
+            return False, "Could not find pip"
+            
+        # Build command
+        cmd = pip_cmd + ['install', package]
+        if upgrade:
+            cmd.append('--upgrade')
+        if user:
+            cmd.append('--user')
+            
+        # Add extra flags for better compatibility
+        cmd.extend(['--no-warn-script-location', '--quiet'])
+            
+        try:
+            print(f"📦 Installing {package}...")
+            
+            # Run installation
+            result = subprocess.run(
+                cmd, 
+                check=True, 
+                capture_output=True, 
+                text=True, 
+                timeout=timeout
+            )
+            
+            self.install_log.append(f"✅ Success: {package}")
+            print(f"   ✅ {package} installed successfully")
+            return True, f"Installed {package}"
+            
+        except subprocess.TimeoutExpired:
+            error_msg = f"Timeout installing {package} (>{timeout}s)"
+            self.install_log.append(f"❌ {error_msg}")
+            print(f"   ❌ {error_msg}")
+            return False, error_msg
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to install {package}"
+            
+            # Provide more specific error messages
+            if "No matching distribution" in e.stderr:
+                error_msg += " - Package not found"
+            elif "Permission" in e.stderr:
+                error_msg += " - Permission denied"
+            elif "Network" in e.stderr or "connect" in e.stderr:
+                error_msg += " - Network error"
+            else:
+                error_msg += f": {e.stderr.strip()[:100]}"
+                
+            self.install_log.append(f"❌ {error_msg}")
+            print(f"   ❌ {error_msg}")
+            
+            # Try with user flag as fallback (if not already tried)
+            if not user and "Permission" in e.stderr:
+                print(f"   🔄 Retrying with --user flag...")
+                return self.install_package(package, upgrade, user=True, timeout=timeout)
+                
+            return False, error_msg
+    
+    def install_all_dependencies(self, upgrade=False, include_optional=False):
+        """Install all required dependencies with better logic"""
+        print("🚀 Starting dependency installation...")
+        print("=" * 50)
+        
+        # Check pip availability first
+        pip_cmd = self.get_install_command()
+        if not pip_cmd:
+            print("❌ Error: Could not find pip. Please install pip first.")
+            return False
+            
+        # Update pip first (but don't fail if it doesn't work)
+        print("🔄 Checking pip version...")
+        try:
+            subprocess.run(
+                pip_cmd + ['install', '--upgrade', 'pip'], 
+                capture_output=True, 
+                timeout=60
+            )
+            print("✅ Pip check completed")
+        except subprocess.SubprocessError:
+            print("⚠️  Could not update pip, continuing...")
+        
+        # Determine which packages to install
+        packages_to_install = []
+        
+        # Check required packages
+        print("\n🔍 Checking required packages...")
+        for pkg, import_name in self.required_packages.items():
+            if self.is_package_installed(pkg):
+                print(f"   ✅ {pkg}")
+            else:
+                print(f"   ❌ {pkg}")
+                packages_to_install.append(pkg)
+        
+        # Add Windows-specific packages
+        if platform.system() == 'Windows':
+            print("\n🔍 Checking Windows-specific packages...")
+            for pkg, import_name in self.windows_packages.items():
+                if self.is_package_installed(pkg):
+                    print(f"   ✅ {pkg}")
+                else:
+                    print(f"   ❌ {pkg}")
+                    packages_to_install.append(pkg)
+        
+        # Add optional packages if requested
+        if include_optional:
+            print("\n🔍 Checking optional packages...")
+            for pkg, import_name in self.optional_packages.items():
+                if self.is_package_installed(pkg):
+                    print(f"   ✅ {pkg}")
+                else:
+                    print(f"   ❌ {pkg}")
+                    packages_to_install.append(pkg)
+        
+        if not packages_to_install:
+            print("\n🎉 All dependencies are already installed!")
+            return True
+        
+        print(f"\n📦 Packages to install: {len(packages_to_install)}")
+        print("=" * 50)
+        
+        # Install packages with progress
+        success_count = 0
+        failed_packages = []
+        
+        for i, package in enumerate(packages_to_install, 1):
+            print(f"\n[{i}/{len(packages_to_install)}] Installing {package}...")
+            success, message = self.install_package(package, upgrade)
+            if success:
+                success_count += 1
+            else:
+                failed_packages.append((package, message))
+            
+            # Brief pause between installations
+            time.sleep(1)
+        
+        # Print comprehensive summary
+        print("\n" + "=" * 50)
+        print("📊 INSTALLATION SUMMARY")
+        print("=" * 50)
+        print(f"✅ Successful: {success_count}/{len(packages_to_install)}")
+        print(f"❌ Failed: {len(failed_packages)}")
+        
+        if failed_packages:
+            print("\n❌ Failed packages:")
+            for pkg, error in failed_packages:
+                print(f"   • {pkg}: {error}")
+            
+            print("\n💡 Solutions:")
+            print("1. Try running as administrator/root")
+            print("2. Check internet connection")
+            print("3. Try manual installation: pip install package_name")
+            print("4. Some packages might not be available for your platform")
+            
+            # Suggest manual installation commands
+            print("\n🔧 Manual installation commands:")
+            for pkg, error in failed_packages:
+                print(f"   pip install {pkg}")
+        
+        return len(failed_packages) == 0
+    
+    def create_requirements_file(self, filename='requirements.txt'):
+        """Create requirements.txt file"""
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write("# KingzVPN Pro - Requirements\n")
+                f.write("# Generated automatically\n")
+                f.write(f"# Python {platform.python_version()}\n")
+                f.write(f"# System: {platform.system()}\n\n")
+                
+                f.write("# Required packages\n")
+                for pkg in self.required_packages.keys():
+                    f.write(f"{pkg}\n")
+                
+                # Add platform-specific packages
+                if platform.system() == 'Windows':
+                    f.write("\n# Windows-specific packages\n")
+                    for pkg in self.windows_packages.keys():
+                        f.write(f"{pkg}\n")
+                
+                f.write("\n# Optional packages\n")
+                for pkg in self.optional_packages.keys():
+                    f.write(f"#{pkg}\n")
+            
+            print(f"✅ Requirements file created: {filename}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to create requirements file: {e}")
+            return False
+
+# ===== ENHANCED VPN CLIENT WITH BETTER DEPENDENCY HANDLING =====
 import customtkinter as ctk
 import requests
 from requests.exceptions import RequestException
@@ -20,62 +322,162 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Union, Tuple
 from queue import Queue
+import tkinter as tk
+from tkinter import messagebox
+import socket
+import platform
+import webbrowser
+import sqlite3
+import hashlib
+import secrets
+import string
+import zipfile
+import tempfile
+import shutil
+
+# Import available libraries with fallbacks
+CRYPTO_AVAILABLE = False
+QRCODE_AVAILABLE = False
+SPEEDTEST_AVAILABLE = False
+PING3_AVAILABLE = False
+NETIFACES_AVAILABLE = False
+PYPERCLIP_AVAILABLE = False
+WIN32CLIPBOARD_AVAILABLE = False
+
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    CRYPTO_AVAILABLE = True
+    print("✅ cryptography available")
+except ImportError as e:
+    print("❌ cryptography not available")
+
+try:
+    import qrcode
+    from PIL import Image, ImageTk
+    QRCODE_AVAILABLE = True
+    print("✅ qrcode available")
+except ImportError as e:
+    print("❌ qrcode not available")
+
+try:
+    import speedtest
+    SPEEDTEST_AVAILABLE = True
+    print("✅ speedtest available")
+except ImportError as e:
+    print("❌ speedtest not available")
+
+try:
+    import ping3
+    PING3_AVAILABLE = True
+    print("✅ ping3 available")
+except ImportError as e:
+    print("❌ ping3 not available")
+
+try:
+    import netifaces
+    NETIFACES_AVAILABLE = True
+    print("✅ netifaces available")
+except ImportError as e:
+    print("❌ netifaces not available")
+
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+    print("✅ pyperclip available")
+except ImportError as e:
+    print("❌ pyperclip not available")
+
+try:
+    import win32clipboard
+    WIN32CLIPBOARD_AVAILABLE = True
+    print("✅ win32clipboard available")
+except ImportError as e:
+    print("❌ win32clipboard not available")
+
+# Disable urllib3 warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Setup app directories
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(APP_DIR, 'vpn_configs')
 LOG_DIR = os.path.join(APP_DIR, 'logs')
-for d in [CONFIG_DIR, LOG_DIR]:
+DB_DIR = os.path.join(APP_DIR, 'database')
+CACHE_DIR = os.path.join(APP_DIR, 'cache')
+for d in [CONFIG_DIR, LOG_DIR, DB_DIR, CACHE_DIR]:
     os.makedirs(d, exist_ok=True)
 
+# Configure CTk for better performance
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-class ModernVPNClient:
-    def __init__(self):
+class AdvancedVPNClient:
+    def __init__(self, auto_install_deps=True):
+        print("🚀 Initializing KingzVPN Pro...")
+        
+        # Initialize dependency manager
+        self.dep_manager = DependencyManager()
+        
+        # Check and install dependencies if needed
+        if auto_install_deps:
+            self.install_missing_dependencies()
+        
+        # Now initialize the main application
         self.app = ctk.CTk()
         self.setup_window()
+        
+        # Initialize all UI frames first
+        self.quick_connect_frame = None
+        self.configs_frame = None
+        self.speed_frame = None
+        self.settings_frame = None
+        self.tools_frame = None
+        self.deps_frame = None
+        self.main_content = None
+        self.sidebar = None
+        
         self.configs = []
         self.current_config = None
         self.vpn_process = None
         self.is_connected = False
         
-        # Защита от множественных попыток подключения
         self.connection_lock = threading.Lock()
-        # Для мониторинга процесса OpenVPN
         self.process_output = []
-        self.openvpn_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vpn_configs')
-        if not os.path.exists(self.openvpn_config_path):
-            os.makedirs(self.openvpn_config_path)
+        self.openvpn_config_path = CONFIG_DIR
 
-        # События для контроля потоков
+        # Enhanced events system
         self.events = {
             'stats_stop': Event(),
             'monitor_stop': Event(),
-            'process_stop': Event()
+            'process_stop': Event(),
+            'scan_stop': Event(),
+            'update_stop': Event()
         }
         
-        # Хранение активных потоков для корректного завершения
-        self.active_threads = {
-            'monitor': None,
-            'stats': None,
-            'process': None
-        }
+        self.active_threads = {}
+        self.stats_queue = Queue(maxsize=50)
         
-        # Очередь для безопасной передачи данных между потоками
-        self.stats_queue = Queue(maxsize=100)
+        self.speed_widgets = {}
+        self.nav_buttons = {}
         
-        # Для хранения прямых ссылок на виджеты скорости
-        self.speed_widgets = {
-            'download': None,  # download_label
-            'upload': None,    # upload_label
-            'ping': None      # ping_label
-        }
+        # Performance optimization
+        self.last_stats_update = 0
+        self.stats_update_interval = 0.5
         
-        # Логирование
+        # Enhanced functionality storage
+        self.network_devices = []
+        self.port_scan_results = []
+        self.traffic_data = []
+        self.connection_history = []
+        self.favorite_servers = []
+        self.auto_connect_rules = []
+        
         self.setup_logging()
+        self.setup_database()
+        self.load_user_preferences()
         
-        # Цветовая схема
+        # Enhanced color scheme
         self.colors = {
             "primary": "#2b825b",
             "secondary": "#2196F3", 
@@ -83,1511 +485,816 @@ class ModernVPNClient:
             "warning": "#FF9800",
             "danger": "#ff6b6b",
             "dark_bg": "#1a1a1a",
-            "card_bg": ("#2d2d2d", "#1e1e1e")
+            "card_bg": "#2d2d2d",
+            "text_primary": "#ffffff",
+            "text_secondary": "#b0b0b0"
         }
         
         self.load_data()
         self.create_ui()
         
+    def install_missing_dependencies(self):
+        """Install missing dependencies automatically"""
+        print("\n" + "=" * 50)
+        print("🔍 Checking dependencies...")
+        print("=" * 50)
+        
+        # First check system requirements
+        if not self.dep_manager.check_system_requirements():
+            print("❌ System requirements not met")
+            response = input("Continue anyway? (y/n): ")
+            if response.lower() not in ['y', 'yes']:
+                sys.exit(1)
+        
+        missing_packages = []
+        for pkg, import_name in self.dep_manager.required_packages.items():
+            if not self.dep_manager.is_package_installed(pkg):
+                missing_packages.append(pkg)
+        
+        # Check Windows packages
+        if platform.system() == 'Windows':
+            for pkg, import_name in self.dep_manager.windows_packages.items():
+                if not self.dep_manager.is_package_installed(pkg):
+                    missing_packages.append(pkg)
+        
+        if missing_packages:
+            print(f"❌ Missing {len(missing_packages)} packages: {', '.join(missing_packages)}")
+            print("\n💡 Some features may not work without these packages.")
+            
+            response = input("🤔 Install missing dependencies automatically? (y/n): ")
+            
+            if response.lower() in ['y', 'yes']:
+                print("🚀 Starting automatic installation...")
+                success = self.dep_manager.install_all_dependencies()
+                
+                if success:
+                    print("✅ All dependencies installed successfully!")
+                    print("🔄 Restarting application to load new dependencies...")
+                    time.sleep(2)
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                else:
+                    print("❌ Some dependencies failed to install.")
+                    response = input("Continue anyway? (y/n): ")
+                    if response.lower() not in ['y', 'yes']:
+                        sys.exit(1)
+            else:
+                print("⚠️  Continuing with missing dependencies...")
+                print("💡 You can install dependencies later from the Dependencies tab.")
+        else:
+            print("✅ All dependencies are installed!")
+    
     def setup_window(self):
-        self.app.title("🔒 KingzVPN - Secure Connection")
+        self.app.title("KingzVPN Pro - Advanced VPN Client")
         self.app.geometry("1200x800")
         self.app.minsize(1000, 700)
         
-        # Центрирование окна
+        # Center window
         self.app.update_idletasks()
-        x = (self.app.winfo_screenwidth() // 2) - (1200 // 2)
-        y = (self.app.winfo_screenheight() // 2) - (800 // 2)
+        screen_width = self.app.winfo_screenwidth()
+        screen_height = self.app.winfo_screenheight()
+        x = (screen_width - 1200) // 2
+        y = (screen_height - 800) // 2
         self.app.geometry(f"1200x800+{x}+{y}")
         
+        # Set window icon (if available)
+        try:
+            self.app.iconbitmap(default='icon.ico')
+        except:
+            pass
+
+    # === ENHANCED DEPENDENCY MANAGEMENT UI ===
+    def show_dependency_manager(self):
+        """Show enhanced dependency management dialog"""
+        dialog = ctk.CTkToplevel(self.app)
+        dialog.title("Dependency Manager")
+        dialog.geometry("700x500")
+        dialog.transient(self.app)
+        dialog.grab_set()
+        
+        # Title
+        title = ctk.CTkLabel(dialog, text="📦 Dependency Manager", 
+                           font=("Arial", 20, "bold"))
+        title.pack(pady=10)
+        
+        # System info
+        info_frame = ctk.CTkFrame(dialog)
+        info_frame.pack(fill="x", padx=20, pady=5)
+        
+        sys_info = f"Python {platform.python_version()} | {platform.system()} {platform.release()}"
+        ctk.CTkLabel(info_frame, text=sys_info, font=("Arial", 11)).pack(pady=5)
+        
+        # Status summary
+        summary_frame = ctk.CTkFrame(dialog)
+        summary_frame.pack(fill="x", padx=20, pady=5)
+        
+        # Count installed vs missing
+        total_packages = len(self.dep_manager.required_packages)
+        if platform.system() == 'Windows':
+            total_packages += len(self.dep_manager.windows_packages)
+            
+        installed_count = 0
+        for pkg in self.dep_manager.required_packages:
+            if self.dep_manager.is_package_installed(pkg):
+                installed_count += 1
+                
+        if platform.system() == 'Windows':
+            for pkg in self.dep_manager.windows_packages:
+                if self.dep_manager.is_package_installed(pkg):
+                    installed_count += 1
+        
+        status_text = f"📊 Status: {installed_count}/{total_packages} packages installed"
+        ctk.CTkLabel(summary_frame, text=status_text, font=("Arial", 14, "bold")).pack()
+        
+        # Dependency list in scrollable frame
+        deps_frame = ctk.CTkScrollableFrame(dialog, height=250)
+        deps_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        # Required packages
+        ctk.CTkLabel(deps_frame, text="Required Packages:", 
+                    font=("Arial", 14, "bold")).pack(anchor="w", pady=(0, 5))
+        
+        for pkg, import_name in self.dep_manager.required_packages.items():
+            status = "✅" if self.dep_manager.is_package_installed(pkg) else "❌"
+            dep_text = f"   {status} {pkg} -> {import_name}"
+            ctk.CTkLabel(deps_frame, text=dep_text, font=("Arial", 11)).pack(anchor="w")
+        
+        # Windows packages
+        if platform.system() == 'Windows':
+            ctk.CTkLabel(deps_frame, text="\nWindows Packages:", 
+                        font=("Arial", 14, "bold")).pack(anchor="w", pady=(10, 5))
+            
+            for pkg, import_name in self.dep_manager.windows_packages.items():
+                status = "✅" if self.dep_manager.is_package_installed(pkg) else "❌"
+                dep_text = f"   {status} {pkg} -> {import_name}"
+                ctk.CTkLabel(deps_frame, text=dep_text, font=("Arial", 11)).pack(anchor="w")
+        
+        # Buttons frame
+        btn_frame = ctk.CTkFrame(dialog)
+        btn_frame.pack(fill="x", padx=20, pady=10)
+        
+        # Install button
+        install_btn = ctk.CTkButton(
+            btn_frame, 
+            text="🔧 Install All Dependencies",
+            command=lambda: self._install_deps_from_dialog(dialog),
+            fg_color="#28a745",
+            hover_color="#218838"
+        )
+        install_btn.pack(side="left", padx=5)
+        
+        # Create requirements file button
+        req_btn = ctk.CTkButton(
+            btn_frame,
+            text="📄 Create Requirements File",
+            command=lambda: self.dep_manager.create_requirements_file(),
+            fg_color="#17a2b8",
+            hover_color="#138496"
+        )
+        req_btn.pack(side="left", padx=5)
+        
+        # Close button
+        close_btn = ctk.CTkButton(
+            btn_frame,
+            text="❌ Close",
+            command=dialog.destroy
+        )
+        close_btn.pack(side="right", padx=5)
+        
+        # Refresh button
+        refresh_btn = ctk.CTkButton(
+            btn_frame,
+            text="🔄 Refresh",
+            command=lambda: self._refresh_dependency_dialog(dialog)
+        )
+        refresh_btn.pack(side="right", padx=5)
+
+    def _install_deps_from_dialog(self, dialog):
+        """Install dependencies from dialog with progress"""
+        # Disable install button during installation
+        for widget in dialog.winfo_children():
+            if isinstance(widget, ctk.CTkFrame):
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkButton) and "Install" in child.cget("text"):
+                        child.configure(state="disabled")
+        
+        # Show progress label
+        progress_label = ctk.CTkLabel(dialog, text="🔄 Installing dependencies...", 
+                                    font=("Arial", 12, "bold"))
+        progress_label.pack(pady=5)
+        
+        def install_async():
+            try:
+                success = self.dep_manager.install_all_dependencies()
+                
+                def update_ui():
+                    progress_label.destroy()
+                    
+                    if success:
+                        # Show success message
+                        success_label = ctk.CTkLabel(
+                            dialog, 
+                            text="✅ Dependencies installed successfully!", 
+                            font=("Arial", 12, "bold"),
+                            text_color="#28a745"
+                        )
+                        success_label.pack(pady=5)
+                        
+                        # Ask to restart
+                        response = messagebox.askyesno(
+                            "Restart Required", 
+                            "Dependencies installed successfully!\n\n"
+                            "Restart application for changes to take effect?"
+                        )
+                        if response:
+                            os.execv(sys.executable, [sys.executable] + sys.argv)
+                    else:
+                        # Show error message
+                        error_label = ctk.CTkLabel(
+                            dialog, 
+                            text="❌ Some dependencies failed to install", 
+                            font=("Arial", 12, "bold"),
+                            text_color="#dc3545"
+                        )
+                        error_label.pack(pady=5)
+                        
+                        # Show solution tips
+                        tips_label = ctk.CTkLabel(
+                            dialog,
+                            text="💡 Check console for details and solutions",
+                            font=("Arial", 10)
+                        )
+                        tips_label.pack(pady=2)
+                
+                dialog.after(0, update_ui)
+                
+            except Exception as e:
+                def show_error():
+                    progress_label.destroy()
+                    error_label = ctk.CTkLabel(
+                        dialog, 
+                        text=f"❌ Installation failed: {str(e)}", 
+                        font=("Arial", 12, "bold"),
+                        text_color="#dc3545"
+                    )
+                    error_label.pack(pady=5)
+                
+                dialog.after(0, show_error)
+        
+        threading.Thread(target=install_async, daemon=True).start()
+
+    def _refresh_dependency_dialog(self, dialog):
+        """Refresh dependency dialog"""
+        dialog.destroy()
+        self.show_dependency_manager()
+
+    # === SIMPLIFIED CLIPBOARD SYSTEM ===
+    def setup_clipboard_support(self):
+        """Simplified clipboard support that just works"""
+        try:
+            # Get the underlying tkinter entry
+            tk_entry = self.url_entry._entry
+            
+            # Bind paste events
+            tk_entry.bind('<Control-v>', self._handle_paste_simple)
+            tk_entry.bind('<Control-V>', self._handle_paste_simple)
+            
+            # Right-click context menu
+            tk_entry.bind('<Button-3>', self._show_simple_context_menu)
+            
+            print("✅ Clipboard support initialized")
+            
+        except Exception as e:
+            print(f"❌ Clipboard setup failed: {e}")
+
+    def _handle_paste_simple(self, event):
+        """Simple non-blocking paste handler"""
+        try:
+            # Use tkinter's built-in clipboard (most reliable)
+            clipboard_content = self.app.clipboard_get()
+            
+            if clipboard_content:
+                # Insert at cursor position
+                event.widget.insert('insert', clipboard_content)
+                self.show_notification("Text pasted successfully", "success")
+            
+            return "break"  # Prevent default handling
+            
+        except Exception as e:
+            print(f"❌ Paste failed: {e}")
+            self.show_notification("Paste failed", "error")
+            return "break"
+
+    def _show_simple_context_menu(self, event):
+        """Simple context menu"""
+        try:
+            menu = tk.Menu(self.app, tearoff=0)
+            menu.add_command(label="Paste", command=lambda: self._handle_paste_simple(event))
+            menu.add_separator()
+            menu.add_command(label="Copy", command=self._context_copy_simple)
+            menu.add_command(label="Cut", command=self._context_cut_simple)
+            menu.add_command(label="Select All", command=self._context_select_all_simple)
+            
+            menu.tk_popup(event.x_root, event.y_root)
+            
+        except Exception as e:
+            print(f"❌ Context menu failed: {e}")
+
+    def _context_copy_simple(self):
+        """Simple copy operation"""
+        try:
+            selected_text = self.url_entry.get()
+            if selected_text:
+                self.app.clipboard_clear()
+                self.app.clipboard_append(selected_text)
+                self.show_notification("Text copied", "success")
+        except Exception as e:
+            print(f"❌ Copy failed: {e}")
+
+    def _context_cut_simple(self):
+        """Simple cut operation"""
+        try:
+            selected_text = self.url_entry.get()
+            if selected_text:
+                self.app.clipboard_clear()
+                self.app.clipboard_append(selected_text)
+                self.url_entry.delete(0, 'end')
+                self.show_notification("Text cut", "success")
+        except Exception as e:
+            print(f"❌ Cut failed: {e}")
+
+    def _context_select_all_simple(self):
+        """Simple select all"""
+        try:
+            self.url_entry._entry.select_range(0, 'end')
+            self.url_entry._entry.icursor('end')
+        except Exception as e:
+            print(f"❌ Select all failed: {e}")
+
+    # === CORE APPLICATION FUNCTIONALITY ===
+    def setup_database(self):
+        """Initialize SQLite database"""
+        try:
+            self.db_conn = sqlite3.connect(os.path.join(DB_DIR, 'vpn_client.db'))
+            self.db_cursor = self.db_conn.cursor()
+            
+            # Create basic tables
+            self.db_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS connection_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    server_name TEXT,
+                    config_type TEXT,
+                    duration INTEGER,
+                    success BOOLEAN
+                )
+            ''')
+            
+            self.db_conn.commit()
+            self.logger.info("Database initialized")
+            
+        except Exception as e:
+            self.logger.error(f"Database setup failed: {e}")
+
+    def load_user_preferences(self):
+        """Load user preferences"""
+        try:
+            self.db_cursor.execute("SELECT key, value FROM user_preferences")
+            preferences = self.db_cursor.fetchall()
+            
+            self.user_prefs = {key: value for key, value in preferences}
+            self.logger.info("User preferences loaded")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load preferences: {e}")
+            self.user_prefs = {}
+
+    def save_user_preference(self, key, value):
+        """Save user preference"""
+        try:
+            self.db_cursor.execute(
+                "INSERT OR REPLACE INTO user_preferences (key, value) VALUES (?, ?)",
+                (key, value)
+            )
+            self.db_conn.commit()
+            self.user_prefs[key] = value
+        except Exception as e:
+            self.logger.error(f"Failed to save preference: {e}")
+
     def load_data(self):
-        # Предустановленные серверы
+        """Load initial data"""
         self.preset_servers = [
-            {"name": "🇺🇸 США - Нью-Йорк", "ping": 28, "load": 45, "flag": "us", "type": "preset"},
-            {"name": "🇩🇪 Германия - Франкфурт", "ping": 35, "load": 32, "flag": "de", "type": "preset"},
-            {"name": "🇬🇧 Великобритания - Лондон", "ping": 42, "load": 28, "flag": "gb", "type": "preset"},
+            {"name": "USA - New York Premium", "address": "nyc.example.com", "ping": 28, "load": 45, "type": "premium"},
+            {"name": "Germany - Frankfurt Secure", "address": "fra.example.com", "ping": 35, "load": 32, "type": "secure"},
+            {"name": "UK - London Streaming", "address": "lon.example.com", "ping": 42, "load": 28, "type": "streaming"},
         ]
-        
+
+    # === UI CREATION ===
     def create_ui(self):
-        # Создаем основной контейнер с градиентом
+        """Create the main UI"""
+        # Main container
         self.main_container = ctk.CTkFrame(self.app, fg_color=self.colors["dark_bg"])
-        self.main_container.pack(fill="both", expand=True)
+        self.main_container.pack(fill="both", expand=True, padx=0, pady=0)
         
-        # Создаем layout с sidebar и main content
+        # Create sidebar and main content
         self.create_sidebar()
         self.create_main_content()
         
+        # Initialize tabs
+        self.create_quick_connect_tab()
+        self.create_tools_tab()
+        self.create_dependencies_tab()
+        
+        self.show_quick_connect()
+
     def create_sidebar(self):
-        # Боковая панель
+        """Create sidebar navigation"""
         self.sidebar = ctk.CTkFrame(
             self.main_container,
-            width=280,
+            width=250,
             corner_radius=0,
-            fg_color=("#2d2d2d", "#1a1a1a")
+            fg_color=self.colors["card_bg"]
         )
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
         
-        # Логотип в sidebar
+        # Logo section
         logo_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        logo_frame.pack(pady=(30, 20), padx=20)
+        logo_frame.pack(pady=(20, 10), padx=15)
         
         self.logo_label = ctk.CTkLabel(
             logo_frame,
-            text="🛡️ KingzVPN",
-            font=("Arial", 22, "bold"),
+            text="KingzVPN Pro",
+            font=("Arial", 18, "bold"),
             text_color=self.colors["primary"]
         )
         self.logo_label.pack()
         
-        # Навигация
+        # Version info
+        ctk.CTkLabel(
+            logo_frame,
+            text="v2.0 | Stable",
+            font=("Arial", 10),
+            text_color=self.colors["text_secondary"]
+        ).pack(pady=(5, 0))
+        
         self.create_navigation()
-        
-        # Статус подключения в sidebar
         self.create_sidebar_status()
-        
+
     def create_navigation(self):
+        """Create navigation buttons"""
         nav_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        nav_frame.pack(fill="x", padx=15)
+        nav_frame.pack(fill="x", padx=15, pady=10)
         
-        # Кнопки навигации
         nav_buttons = [
-            ("🌐 Быстрое подключение", self.show_quick_connect),
-            ("📁 Мои конфигурации", self.show_configs),
-            ("⚡ Скорость", self.show_speed),
-            ("⚙️ Настройки", self.show_settings)
+            ("🚀 Quick Connect", self.show_quick_connect),
+            ("🛠️ Tools", self.show_tools),
+            ("📦 Dependencies", self.show_dependency_manager),
         ]
         
-        self.nav_buttons = {}
         for text, command in nav_buttons:
             btn = ctk.CTkButton(
                 nav_frame,
                 text=text,
-                font=("Arial", 14),
-                height=45,
+                font=("Arial", 12),
+                height=35,
                 fg_color="transparent",
-                text_color=("gray70", "gray70"),
+                text_color=self.colors["text_secondary"],
                 hover_color=("gray60", "gray30"),
                 anchor="w",
                 command=command
             )
-            btn.pack(fill="x", pady=2)
+            btn.pack(fill="x", pady=1)
             self.nav_buttons[text] = btn
-        
-        # Активируем первую вкладку
-        self.show_quick_connect()
-        
+
     def create_sidebar_status(self):
+        """Create status section in sidebar"""
         status_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        status_frame.pack(side="bottom", fill="x", padx=15, pady=20)
+        status_frame.pack(side="bottom", fill="x", padx=15, pady=15)
         
-        # Индикатор статуса
         self.status_indicator = ctk.CTkLabel(
             status_frame,
-            text="● ОФФЛАЙН",
+            text="● OFFLINE",
             font=("Arial", 12, "bold"),
             text_color=self.colors["danger"]
         )
         self.status_indicator.pack(anchor="w")
         
-        # IP адрес
         self.ip_label = ctk.CTkLabel(
             status_frame,
-            text="IP: Загрузка...",
+            text="IP: Loading...",
             font=("Arial", 10),
-            text_color="gray"
+            text_color=self.colors["text_secondary"]
         )
         self.ip_label.pack(anchor="w")
         
-        # Загружаем IP в отдельном потоке
         threading.Thread(target=self.load_ip_info, daemon=True).start()
-        
+
     def create_main_content(self):
-        # Основная область контента
+        """Create main content area"""
         self.main_content = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        self.main_content.pack(side="right", fill="both", expand=True, padx=20, pady=20)
-        
-        # Создаем разные вкладки
-        self.create_quick_connect_tab()
-        self.create_configs_tab()
-        self.create_speed_tab()
-        self.create_settings_tab()
-        
-        # Сначала показываем быструю вкладку
-        self.show_quick_connect()
-        
+        self.main_content.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
     def create_quick_connect_tab(self):
+        """Create quick connect tab"""
         self.quick_connect_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
         
-        # Заголовок
         title = ctk.CTkLabel(
             self.quick_connect_frame,
-            text="🌐 Быстрое подключение",
-            font=("Arial", 28, "bold")
+            text="Quick Connect",
+            font=("Arial", 24, "bold")
         )
-        title.pack(anchor="w", pady=(0, 30))
+        title.pack(anchor="w", pady=(0, 20))
         
-        # Карточка статуса подключения
-        self.create_connection_card()
-        
-        # Предустановленные серверы
-        self.create_preset_servers()
-        
-        # Импорт конфигурации
-        self.create_import_section()
-        
-    def create_connection_card(self):
-        connection_card = ctk.CTkFrame(
-            self.quick_connect_frame,
-            corner_radius=20,
-            fg_color=self.colors["card_bg"]
-        )
-        connection_card.pack(fill="x", pady=(0, 30))
-        
-        content_frame = ctk.CTkFrame(connection_card, fg_color="transparent")
-        content_frame.pack(fill="x", padx=30, pady=30)
-        
-        # Статус и кнопка подключения
-        status_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        status_frame.pack(fill="x")
-        
-        self.connection_status = ctk.CTkLabel(
-            status_frame,
-            text="Готов к подключению",
-            font=("Arial", 18),
-            text_color="gray"
-        )
-        self.connection_status.pack(side="left")
-        
-        self.connect_button = ctk.CTkButton(
-            status_frame,
-            text="ПОДКЛЮЧИТЬСЯ",
-            font=("Arial", 16, "bold"),
-            height=50,
-            width=200,
-            fg_color=self.colors["primary"],
-            hover_color="#1f6b4a",
-            command=self.toggle_connection
-        )
-        self.connect_button.pack(side="right")
-        
-        # Прогресс бар
-        self.progress_bar = ctk.CTkProgressBar(
-            content_frame,
-            height=6,
-            progress_color=self.colors["success"]
-        )
-        self.progress_bar.pack(fill="x", pady=(20, 0))
-        self.progress_bar.set(0)
-        
-    def create_preset_servers(self):
-        servers_frame = ctk.CTkFrame(self.quick_connect_frame, fg_color="transparent")
-        servers_frame.pack(fill="x", pady=(0, 30))
-        
-        title = ctk.CTkLabel(
-            servers_frame,
-            text="🚀 Рекомендованные серверы",
-            font=("Arial", 20, "bold")
-        )
-        title.pack(anchor="w", pady=(0, 15))
-        
-        # Сетка серверов
-        grid_frame = ctk.CTkFrame(servers_frame, fg_color="transparent")
-        grid_frame.pack(fill="x")
-        
-        for i, server in enumerate(self.preset_servers):
-            server_card = self.create_server_card(server)
-            server_card.pack(side="left", fill="x", expand=True, padx=5)
-            
-    def create_server_card(self, server):
-        card = ctk.CTkFrame(
-            self.quick_connect_frame,
-            corner_radius=15,
-            fg_color=self.colors["card_bg"],
-            border_width=2,
-            border_color=("gray50", "gray30")
-        )
-        
-        content_frame = ctk.CTkFrame(card, fg_color="transparent")
-        content_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # Флаг и название
-        name_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        name_frame.pack(fill="x")
-        
-        ctk.CTkLabel(
-            name_frame,
-            text=server["name"],
-            font=("Arial", 14, "bold")
-        ).pack(side="left")
-        
-        # Статистика
-        stats_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        stats_frame.pack(fill="x", pady=(10, 0))
-        
-        ctk.CTkLabel(
-            stats_frame,
-            text=f"🏓 {server['ping']}ms",
-            font=("Arial", 11),
-            text_color="#888"
-        ).pack(side="left")
-        
-        ctk.CTkLabel(
-            stats_frame,
-            text=f"📊 {server['load']}%",
-            font=("Arial", 11),
-            text_color="#888"
-        ).pack(side="left", padx=(10, 0))
-        
-        # Кнопка подключения
-        connect_btn = ctk.CTkButton(
-            content_frame,
-            text="Подключиться",
-            height=35,
-            fg_color=self.colors["primary"],
-            command=lambda s=server: self.connect_to_preset(s)
-        )
-        connect_btn.pack(fill="x", pady=(15, 0))
-        
-        return card
-        
-    def create_import_section(self):
+        # Import section
         import_card = ctk.CTkFrame(
             self.quick_connect_frame,
-            corner_radius=20,
+            corner_radius=10,
             fg_color=self.colors["card_bg"]
         )
-        import_card.pack(fill="x")
+        import_card.pack(fill="x", pady=10)
         
         content_frame = ctk.CTkFrame(import_card, fg_color="transparent")
-        content_frame.pack(fill="x", padx=30, pady=25)
+        content_frame.pack(fill="x", padx=20, pady=15)
         
-        title = ctk.CTkLabel(
+        ctk.CTkLabel(
             content_frame,
-            text="📥 Импорт конфигурации",
+            text="Import VPN Configuration",
             font=("Arial", 18, "bold")
-        )
-        title.pack(anchor="w", pady=(0, 15))
+        ).pack(anchor="w", pady=(0, 10))
         
-        # URL ввод
         url_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
         url_frame.pack(fill="x")
         
         self.url_entry = ctk.CTkEntry(
             url_frame,
-            placeholder_text="Введите URL конфигурации...",
-            height=45,
-            font=("Arial", 13)
+            placeholder_text="Enter config URL or paste with Ctrl+V...",
+            height=40,
+            font=("Arial", 12)
         )
         self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
-        # Автозаполнение тестовым конфигом
-        self.url_entry.insert(0, "http://185.184.123.133:2096/sub/cnk3x4buk8azncdw")
+        # Setup clipboard support
+        self.setup_clipboard_support()
         
         import_btn = ctk.CTkButton(
             url_frame,
-            text="Импорт",
-            height=45,
-            width=120,
+            text="Import",
+            height=40,
+            width=100,
+            font=("Arial", 12),
             fg_color=self.colors["secondary"],
             command=self.import_config
         )
         import_btn.pack(side="right")
-        
-    def create_configs_tab(self):
-        self.configs_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
-        
-        title = ctk.CTkLabel(
-            self.configs_frame,
-            text="📁 Мои конфигурации", 
-            font=("Arial", 28, "bold")
-        )
-        title.pack(anchor="w", pady=(0, 30))
-        
-        # Список конфигураций
-        self.configs_scrollable = ctk.CTkScrollableFrame(
-            self.configs_frame,
-            fg_color="transparent"
-        )
-        self.configs_scrollable.pack(fill="both", expand=True)
-        
-    def create_speed_tab(self):
-        self.speed_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
-        
-        title = ctk.CTkLabel(
-            self.speed_frame,
-            text="⚡ Скорость подключения",
-            font=("Arial", 28, "bold")
-        )
-        title.pack(anchor="w", pady=(0, 30))
-        
-        # Карточки скорости
-        speed_cards_frame = ctk.CTkFrame(self.speed_frame, fg_color="transparent")
-        speed_cards_frame.pack(fill="x", pady=(0, 30))
-        
-        self.download_card = self.create_speed_card("📥 Скачать", "0", "Mbps")
-        self.download_card.pack(side="left", fill="x", expand=True, padx=5)
-        
-        self.upload_card = self.create_speed_card("📤 Загрузить", "0", "Mbps") 
-        self.upload_card.pack(side="left", fill="x", expand=True, padx=5)
-        
-        self.ping_card = self.create_speed_card("🏓 Пинг", "0", "ms")
-        self.ping_card.pack(side="left", fill="x", expand=True, padx=5)
-        
-        # Кнопка теста скорости
-        test_btn = ctk.CTkButton(
-            self.speed_frame,
-            text="Запустить тест скорости",
-            height=50,
-            font=("Arial", 16, "bold"),
-            fg_color=self.colors["primary"],
-            command=self.start_speed_test
-        )
-        test_btn.pack(pady=20)
-        
-    def create_speed_card(self, title: str, value: str, unit: str) -> ctk.CTkFrame:
-        """Создает карточку для отображения скорости с защитой от ошибок"""
-        try:
-            card = ctk.CTkFrame(
-                self.speed_frame,
-                corner_radius=15,
-                fg_color=self.colors["card_bg"],
-                height=150
-            )
-            card.pack_propagate(False)
-            
-            content_frame = ctk.CTkFrame(card, fg_color="transparent")
-            content_frame.pack(fill="both", expand=True, padx=20, pady=20)
-            
-            # Заголовок
-            ctk.CTkLabel(
-                content_frame,
-                text=title,
-                font=("Arial", 16),
-                text_color="gray"
-            ).pack(anchor="w")
-            
-            # Значение
-            value_label = ctk.CTkLabel(
-                content_frame,
-                text=value,
-                font=("Arial", 32, "bold")
-            )
-            value_label.pack(expand=True)
-            
-            # Единица измерения
-            ctk.CTkLabel(
-                content_frame,
-                text=unit,
-                font=("Arial", 14),
-                text_color="gray"
-            ).pack(anchor="e")
 
-            # Сохраняем ссылки на виджеты в словаре
-            widget_map = {
-                "📥 Скачать": "download",
-                "📤 Загрузить": "upload",
-                "🏓 Пинг": "ping"
-            }
-            
-            if title in widget_map:
-                self.speed_widgets[widget_map[title]] = value_label
+    def create_tools_tab(self):
+        """Create tools tab"""
+        self.tools_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        
+        title = ctk.CTkLabel(
+            self.tools_frame,
+            text="Tools",
+            font=("Arial", 24, "bold")
+        )
+        title.pack(anchor="w", pady=(0, 20))
+        
+        # Tools grid
+        tools_grid = ctk.CTkFrame(self.tools_frame, fg_color="transparent")
+        tools_grid.pack(fill="both", expand=True)
+        
+        # Basic tools card
+        tools_card = ctk.CTkFrame(
+            tools_grid,
+            corner_radius=10,
+            fg_color=self.colors["card_bg"]
+        )
+        tools_card.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        ctk.CTkLabel(
+            tools_card,
+            text="Basic Tools",
+            font=("Arial", 16, "bold")
+        ).pack(pady=10)
+        
+        # Add basic tool buttons
+        self.add_tool_button(tools_card, "Generate Password", 
+                           lambda: self.show_notification(f"Password: {self.generate_strong_password()}", "info"))
+        
+        self.add_tool_button(tools_card, "Test Connection", 
+                           lambda: self.test_connection())
+
+    def create_dependencies_tab(self):
+        """Create dependencies tab placeholder"""
+        self.deps_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
+
+    def add_tool_button(self, parent, text, command):
+        """Add tool button to card"""
+        btn = ctk.CTkButton(
+            parent,
+            text=text,
+            font=("Arial", 12),
+            height=35,
+            fg_color=self.colors["secondary"],
+            command=command
+        )
+        btn.pack(fill="x", padx=10, pady=5)
+
+    # === UTILITY FUNCTIONS ===
+    def generate_strong_password(self, length=16):
+        """Generate strong random password"""
+        try:
+            characters = string.ascii_letters + string.digits + "!@#$%&*"
+            password = ''.join(secrets.choice(characters) for _ in range(length))
+            return password
+        except Exception as e:
+            return "Error generating password"
+
+    def test_connection(self):
+        """Test internet connection"""
+        try:
+            response = requests.get('https://www.google.com', timeout=5)
+            if response.status_code == 200:
+                self.show_notification("Internet connection: OK", "success")
+            else:
+                self.show_notification("Internet connection: Failed", "error")
+        except Exception as e:
+            self.show_notification("Internet connection: Failed", "error")
+
+    def load_ip_info(self):
+        """Load public IP information"""
+        try:
+            response = requests.get('https://api.ipify.org', timeout=5)
+            ip = response.text
+            self.app.after(0, lambda: self.ip_label.configure(text=f"IP: {ip}"))
+        except:
+            self.app.after(0, lambda: self.ip_label.configure(text="IP: Unavailable"))
+
+    def import_config(self):
+        """Import configuration from URL"""
+        try:
+            url = self.url_entry.get().strip()
+            if not url:
+                self.show_notification("Please enter a URL", "warning")
+                return
                 
-            return card
+            # Basic URL validation
+            if not url.startswith(('http://', 'https://')):
+                self.show_notification("Please enter a valid URL", "error")
+                return
+                
+            self.show_notification(f"Importing from: {url}", "info")
+            # Actual import logic would go here
             
         except Exception as e:
-            self.logger.error(f"Failed to create speed card: {e}")
-            # Возвращаем пустой фрейм в случае ошибки
-            return ctk.CTkFrame(self.speed_frame, fg_color="transparent")
-            
-    def safe_destroy(self, widget: Any) -> None:
-        """Безопасно удаляет виджет из любого потока"""
+            self.show_notification(f"Import failed: {str(e)}", "error")
+
+    def show_notification(self, message, type_="info"):
+        """Show notification message"""
         try:
-            if widget and widget.winfo_exists():
-                widget.destroy()
-        except Exception as e:
-            self.logger.error(f"Failed to destroy widget: {e}")
-        
-        return card
-        
-    def setup_logging(self):
-        """Настраивает логирование в файл и консоль с ротацией"""
-        try:
-            self.logger = logging.getLogger('KingzVPN')
-            self.logger.setLevel(logging.DEBUG)
-            
-            # Форматтер с подробной информацией
-            formatter = logging.Formatter(
-                '%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
-            )
-            
-            # Хендлер для файла с ротацией (10 файлов по 5MB)
-            log_file = os.path.join(LOG_DIR, 'vpn.log')
-            file_handler = RotatingFileHandler(
-                log_file, 
-                maxBytes=5*1024*1024,  # 5MB
-                backupCount=10,
-                encoding='utf-8'
-            )
-            file_handler.setLevel(logging.DEBUG)
-            file_handler.setFormatter(formatter)
-            
-            # Хендлер для консоли (только важные сообщения)
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-            console_formatter = logging.Formatter(
-                '%(asctime)s [%(levelname)s] %(message)s',
-                datefmt='%H:%M:%S'
-            )
-            console_handler.setFormatter(console_formatter)
-            
-            # Очищаем существующие хендлеры
-            self.logger.handlers.clear()
-            
-            # Добавляем новые хендлеры
-            self.logger.addHandler(file_handler)
-            self.logger.addHandler(console_handler)
-            
-            self.logger.info("Logging initialized")
-            self.logger.debug(f"Python version: {sys.version}")
-            self.logger.debug(f"OS: {os.name}")
-            self.logger.debug(f"Working directory: {os.getcwd()}")
-            
-        except Exception as e:
-            print(f"Failed to setup logging: {e}")
-            self.logger = logging.getLogger('KingzVPN')
-            self.logger.addHandler(logging.StreamHandler())
-            
-    def safe_ui_update(self, widget: Any, **kwargs) -> None:
-        """Безопасно обновляет виджеты из любого потока"""
-        try:
-            self.app.after(0, widget.configure, kwargs)
-        except Exception as e:
-            self.logger.error(f"UI update failed for {widget}: {e}")
-            
-    def show_notification(self, message: str, type_: str = "info", duration: int = 3000) -> None:
-        """Показывает уведомление с защитой от ошибок"""
-        try:
-            # Получаем цвет из словаря или используем default
             colors = {
                 "success": self.colors["success"],
-                "error": self.colors["danger"],
+                "error": self.colors["danger"], 
                 "warning": self.colors["warning"],
                 "info": self.colors["secondary"]
             }
             bg_color = colors.get(type_, self.colors["secondary"])
             
-            # Создаем и размещаем уведомление
-            notification = ctk.CTkFrame(
-                self.app,
-                corner_radius=10,
-                fg_color=bg_color
-            )
-            
-            # Используем после создания для избежания исключений
-            try:
-                notification.place(relx=0.5, rely=0.1, anchor="center")
-                
-                label = ctk.CTkLabel(
-                    notification,
-                    text=message,
-                    text_color="white",
-                    font=("Arial", 12)
-                )
-                label.pack(padx=20, pady=10)
-                
-                # Логируем уведомление
-                log_level = {
-                    "success": logging.INFO,
-                    "error": logging.ERROR,
-                    "warning": logging.WARNING,
-                    "info": logging.INFO
-                }.get(type_, logging.INFO)
-                
-                self.logger.log(log_level, f"Notification: {message}")
-                
-                # Планируем удаление
-                self.app.after(duration, notification.destroy)
-                
-            except Exception as e:
-                self.logger.error(f"Failed to show notification content: {e}")
-                notification.destroy()
-                
-        except Exception as e:
-            self.logger.error(f"Failed to create notification: {e}")
-            print(f"Notification failed: {message} ({e})")
-        
-    def prepare_vpn_config(self, config):
-        """Подготавливает конфиг для OpenVPN"""
-        if config['type'] in ['vmess', 'ss', 'trojan']:
-            self.log("⚠️ Протокол не поддерживается напрямую. Требуется конвертация.")
-            return None
-            
-        if config['type'] == 'openvpn':
-            # Сохраняем .ovpn файл
-            config_name = f"config_{int(time.time())}.ovpn"
-            config_path = os.path.join(self.openvpn_config_path, config_name)
-            
-            try:
-                with open(config_path, 'w') as f:
-                    f.write(config['content'])
-                self.log(f"✅ Конфиг сохранен: {config_path}")
-                return config_path
-            except Exception as e:
-                self.log(f"❌ Ошибка сохранения конфига: {e}")
-                return None
-        
-        return None
-        
-    def monitor_vpn_process(self, process):
-        """Мониторит вывод процесса OpenVPN"""
-        while process.poll() is None:
-            try:
-                line = process.stdout.readline()
-                if not line:
-                    break
+            def create_notification():
+                try:
+                    notification = ctk.CTkFrame(
+                        self.app,
+                        corner_radius=8,
+                        fg_color=bg_color
+                    )
+                    notification.place(relx=0.5, rely=0.1, anchor="center")
                     
-                line = line.decode('utf-8', errors='ignore').strip()
-                self.process_output.append(line)
-                
-                # Логируем важные сообщения
-                if any(x in line.lower() for x in ['error', 'fatal', 'warn']):
-                    self.logger.warning(line)
-                    self.app.after(0, self.show_notification, f"VPN: {line}", "warning")
-                elif 'initialization sequence completed' in line.lower():
-                    self.logger.info("VPN подключение установлено")
-                    self.app.after(0, self.connection_success)
-                
-            except Exception as e:
-                self.logger.error(f"Ошибка чтения вывода процесса: {e}")
-                
-        # Если процесс завершился
-        if process.poll() is not None:
-            self.logger.warning(f"Процесс OpenVPN завершился с кодом {process.returncode}")
-            self.app.after(0, self.handle_connection_error, f"Процесс завершился с кодом {process.returncode}")
+                    label = ctk.CTkLabel(
+                        notification,
+                        text=message,
+                        text_color="white",
+                        font=("Arial", 11)
+                    )
+                    label.pack(padx=15, pady=8)
+                    
+                    self.app.after(3000, notification.destroy)
+                    
+                except Exception as e:
+                    pass
+                    
+            self.app.after(0, create_notification)
             
-    def handle_connection_error(self, error_msg):
-        """Обрабатывает ошибки подключения"""
-        self.logger.error(f"Ошибка подключения: {error_msg}")
-        self.disconnect_vpn()
-        self.show_notification(f"Ошибка: {error_msg}", "error")
-        
-    def create_settings_tab(self):
-        self.settings_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
-        
-        title = ctk.CTkLabel(
-            self.settings_frame,
-            text="⚙️ Настройки",
-            font=("Arial", 28, "bold")
-        )
-        title.pack(anchor="w", pady=(0, 30))
-        
-        # Настройки карточка
-        settings_card = ctk.CTkFrame(
-            self.settings_frame,
-            corner_radius=20,
-            fg_color=self.colors["card_bg"]
-        )
-        settings_card.pack(fill="x")
-        
-        content_frame = ctk.CTkFrame(settings_card, fg_color="transparent")
-        content_frame.pack(fill="x", padx=30, pady=25)
-        
-        # Автозапуск
-        auto_start_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        auto_start_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(
-            auto_start_frame,
-            text="Запуск с Windows",
-            font=("Arial", 14)
-        ).pack(side="left")
-        
-        auto_start_switch = ctk.CTkSwitch(
-            auto_start_frame,
-            text="",
-            width=20
-        )
-        auto_start_switch.pack(side="right")
-        
-        # Kill Switch
-        kill_switch_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        kill_switch_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(
-            kill_switch_frame,
-            text="Kill Switch (блокировка без VPN)",
-            font=("Arial", 14)
-        ).pack(side="left")
-        
-        kill_switch = ctk.CTkSwitch(
-            kill_switch_frame,
-            text="",
-            width=20
-        )
-        kill_switch.pack(side="right")
-        
+        except Exception as e:
+            pass
+
+    # === TAB MANAGEMENT ===
     def show_quick_connect(self):
+        """Show quick connect tab"""
         self.hide_all_tabs()
-        self.quick_connect_frame.pack(fill="both", expand=True)
-        self.highlight_nav_button("🌐 Быстрое подключение")
-        
-    def show_configs(self):
+        if self.quick_connect_frame:
+            self.quick_connect_frame.pack(fill="both", expand=True)
+        self.highlight_nav_button("🚀 Quick Connect")
+
+    def show_tools(self):
+        """Show tools tab"""
         self.hide_all_tabs()
-        self.configs_frame.pack(fill="both", expand=True)
-        self.highlight_nav_button("📁 Мои конфигурации")
-        
-    def show_speed(self):
-        self.hide_all_tabs()
-        self.speed_frame.pack(fill="both", expand=True)
-        self.highlight_nav_button("⚡ Скорость")
-        
-    def show_settings(self):
-        self.hide_all_tabs()
-        self.settings_frame.pack(fill="both", expand=True)
-        self.highlight_nav_button("⚙️ Настройки")
-        
+        if self.tools_frame:
+            self.tools_frame.pack(fill="both", expand=True)
+        self.highlight_nav_button("🛠️ Tools")
+
     def hide_all_tabs(self):
-        for frame in [self.quick_connect_frame, self.configs_frame, 
-                     self.speed_frame, self.settings_frame]:
-            frame.pack_forget()
-            
+        """Hide all tabs"""
+        frames = [self.quick_connect_frame, self.tools_frame, self.deps_frame]
+        for frame in frames:
+            if frame:
+                try:
+                    frame.pack_forget()
+                except:
+                    pass
+
     def highlight_nav_button(self, button_text):
+        """Highlight active navigation button"""
         for text, btn in self.nav_buttons.items():
             if text == button_text:
                 btn.configure(fg_color=("gray60", "gray30"))
             else:
                 btn.configure(fg_color="transparent")
-                
-    def connect_to_preset(self, server):
-        self.log(f"Подключение к {server['name']}...")
-        # Здесь будет логика подключения к preset серверам
-        
-    def import_config(self):
-        """Импортирует конфигурацию из URL"""
-        try:
-            url = self.url_entry.get().strip()
-            if not url:
-                self.show_notification("Введите URL конфигурации", "warning")
-                return
-                
-            # Базовая валидация URL
-            if not url.startswith(('http://', 'https://')):
-                self.show_notification("Неверный формат URL", "warning")
-                return
-                
-            # Блокируем UI на время загрузки
-            self.url_entry.configure(state="disabled")
-            self.show_notification("Загрузка конфигурации...", "info")
-            
-            # Сохраняем URL для потока
-            thread_url = url  # Локальная копия для потока
-            
-            # Запускаем загрузку в отдельном потоке
-            thread = threading.Thread(
-                target=self.download_config,
-                args=(thread_url,),
-                daemon=True
-            )
-            thread.start()
-            
-            # Наблюдаем за потоком
-            self.active_threads['download'] = thread
-            
-        except Exception as e:
-            self.logger.error(f"Ошибка импорта: {e}")
-            self.show_notification(f"Ошибка: {str(e)}", "error")
-            self.url_entry.configure(state="normal")
-        
-    def download_config(self, url: str) -> None:
-        """Загружает и анализирует конфигурацию VPN безопасно"""
-        if not isinstance(url, str):
-            self.app.after(0, self.show_notification, "Неверный формат URL", "error")
-            return
 
+    # === LOGGING AND CLEANUP ===
+    def setup_logging(self):
+        """Setup logging system"""
         try:
-            self.logger.info(f"Загрузка конфига с URL: {url}")
+            self.logger = logging.getLogger('KingzVPNPro')
+            self.logger.setLevel(logging.INFO)
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/plain, application/json, application/x-ovpn',
-                'Connection': 'close'
-            }
-            
-            # Отключаем предупреждения о SSL для некоторых VPN сервисов
-            with urllib3.disable_warnings():
-                response = requests.get(
-                    url, 
-                    headers=headers, 
-                    timeout=30, 
-                    verify=False, 
-                    stream=True
-                )
-                response.raise_for_status()
-                
-                # Ограничиваем размер ответа
-                content = ""
-                total_size = 0
-                chunk_size = 8192
-                max_size = 1024 * 1024  # 1MB limit
-                
-                for chunk in response.iter_content(chunk_size=chunk_size, decode_unicode=True):
-                    total_size += len(chunk)
-                    if total_size > max_size:
-                        raise ValueError("Размер конфига превышает 1MB")
-                    content += chunk
-                
-            content = content.strip()
-            self.logger.info(f"Получено {len(content)} байт")
-            
-            # Анализируем содержимое
-            if len(content) > 50000:
-                self.logger.warning("Большой размер конфига, обрезаем до 50KB")
-                content = content[:50000]
-            
-            config_type = self.detect_config_type(content)
-            if not config_type:
-                raise ValueError("Неизвестный формат конфигурации")
-                
-            config_data = {
-                'name': f"{config_type} {time.strftime('%H:%M')}",
-                'type': config_type,
-                'content': content,
-                'url': url,
-                'imported_at': time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            self.logger.info(f"Конфиг определен как: {config_type}")
-            self.app.after(0, self.add_config, config_data)
-            self.app.after(0, lambda: self.show_notification(f"Конфигурация {config_type} загружена!", "success"))
-            
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Ошибка сети: {str(e)}"
-            self.logger.error(error_msg)
-            self.app.after(0, lambda: self.show_notification(error_msg, "error"))
-        except Exception as e:
-            error_msg = f"Ошибка обработки: {str(e)}"
-            self.logger.error(error_msg)
-            self.app.after(0, lambda: self.show_notification(error_msg, "error"))
-            
-    def detect_config_type(self, content: str, max_recursion: int = 3) -> Optional[str]:
-        """
-        Определяет тип конфигурации по содержимому с защитой от рекурсии
-        
-        Args:
-            content: Содержимое конфига
-            max_recursion: Максимальная глубина рекурсии для декодирования base64
-            
-        Returns:
-            Тип конфига или None если не удалось определить
-        """
-        if not content or max_recursion <= 0:
-            return None
-            
-        content = content.strip()
-        
-        # OpenVPN конфиг (более строгая проверка)
-        if all(x in content.lower() for x in ['client', 'remote']) and \
-           any(x in content.lower() for x in ['proto tcp', 'proto udp']):
-            return 'openvpn'
-            
-        # VMess с проверкой структуры
-        if 'vmess://' in content:
-            try:
-                vmess_data = content.split('vmess://')[1].strip()
-                decoded = base64.b64decode(vmess_data + '=' * (-len(vmess_data) % 4))
-                config = json.loads(decoded)
-                required = ['add', 'port', 'id', 'aid']  # Минимальные обязательные поля
-                if all(x in config for x in required):
-                    return 'vmess'
-            except Exception as e:
-                self.logger.debug(f"VMess validation failed: {e}")
-            
-        # ShadowSocks с валидацией
-        if 'ss://' in content:
-            try:
-                ss_url = re.search(r'ss://([^#\s]+)', content).group(1)
-                # Проверяем base64 часть
-                if '#' in ss_url:
-                    ss_url = ss_url.split('#')[0]
-                decoded = base64.b64decode(ss_url + '=' * (-len(ss_url) % 4))
-                if b':' in decoded and b'@' in decoded:  # Проверяем формат method:password@host:port
-                    return 'shadowsocks'
-            except Exception as e:
-                self.logger.debug(f"SS validation failed: {e}")
-            
-        # Trojan с проверкой формата
-        if 'trojan://' in content:
-            try:
-                if re.match(r'trojan://[^@]+@[\w\-\.]+:\d+\??[^#]*(?:#.*)?$', content):
-                    return 'trojan'
-            except Exception as e:
-                self.logger.debug(f"Trojan validation failed: {e}")
-            
-        # Base64 с рекурсией и лимитом
-        try:
-            if re.match(r'^[A-Za-z0-9+/=]+$', content):
-                missing_padding = (-len(content) % 4)
-                if missing_padding:
-                    content += '=' * missing_padding
-                    
-                decoded = base64.b64decode(content).decode('utf-8', errors='ignore')
-                # Проверяем размер декодированного содержимого
-                if len(decoded) > 50000:
-                    self.logger.warning("Base64 decoded content too large, truncating")
-                    decoded = decoded[:50000]
-                    
-                if any(x in decoded for x in ['client', 'vmess://', 'ss://', 'trojan://']):
-                    # Рекурсивный вызов с уменьшением счетчика
-                    return self.detect_config_type(decoded, max_recursion - 1)
-        except Exception as e:
-            self.logger.debug(f"Base64 decode failed: {e}")
-            
-        # JSON/YAML с конфигами (более тщательная проверка)
-        try:
-            if content.lstrip().startswith(('{', '[')):
-                data = json.loads(content)
-                
-                # Проверяем разные форматы
-                if isinstance(data, dict):
-                    # Clash формат
-                    if 'proxies' in data and isinstance(data['proxies'], list):
-                        return 'clash_config'
-                    # Обычный JSON конфиг
-                    if any(x in data for x in ['server', 'remote', 'address']):
-                        return 'json_config'
-                elif isinstance(data, list):
-                    # Массив конфигов
-                    if any(isinstance(x, dict) and 'type' in x for x in data):
-                        return 'json_config'
-                        
-        except json.JSONDecodeError:
-            self.logger.debug("Not a valid JSON")
-        except Exception as e:
-            self.logger.debug(f"JSON validation failed: {e}")
-            
-        return None
-            
-    def add_config(self, config_data):
-        """Добавляет новую конфигурацию"""
-        try:
-            # Подготавливаем конфиг перед сохранением
-            config_data = self.prepare_config_data(config_data)
-            if not config_data:
-                raise ValueError("Неверный формат конфигурации")
-                
-            # Сохраняем в файл если это OpenVPN конфиг
-            if config_data['type'] == 'openvpn':
-                config_path = self.save_openvpn_config(config_data)
-                if config_path:
-                    config_data['file_path'] = config_path
-                    
-            # Проверяем на дубликаты
-            for existing in self.configs:
-                if self.is_duplicate_config(existing, config_data):
-                    self.logger.warning("Обнаружен дубликат конфига")
-                    self.show_notification("Такой конфиг уже добавлен", "warning")
-                    return
-                    
-            self.configs.append(config_data)
-            self.create_config_card(config_data)
-            self.logger.info(f"Добавлен конфиг: {config_data['name']}")
-            
-        except Exception as e:
-            self.logger.error(f"Ошибка добавления конфига: {e}")
-            self.show_notification(f"Ошибка: {str(e)}", "error")
-            
-    def is_duplicate_config(self, config1, config2):
-        """Проверяет, являются ли конфиги дубликатами"""
-        if config1['type'] != config2['type']:
-            return False
-            
-        if config1.get('url') and config2.get('url'):
-            return config1['url'] == config2['url']
-            
-        if 'content' in config1 and 'content' in config2:
-            return config1['content'] == config2['content']
-            
-        return False
-        
-    def prepare_config_data(self, config_data):
-        """Подготавливает и валидирует данные конфига"""
-        required_fields = ['name', 'type', 'content']
-        for field in required_fields:
-            if field not in config_data:
-                raise ValueError(f"Отсутствует обязательное поле: {field}")
-                
-        # Нормализуем тип
-        config_data['type'] = config_data['type'].lower()
-        
-        # Добавляем метку времени если нет
-        if 'imported_at' not in config_data:
-            config_data['imported_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-        return config_data
-        
-    def save_openvpn_config(self, config_data):
-        """Сохраняет OpenVPN конфиг в файл"""
-        try:
-            if not os.path.exists(self.openvpn_config_path):
-                os.makedirs(self.openvpn_config_path)
-                
-            safe_name = re.sub(r'[^\w\-_.]', '_', config_data['name'])
-            config_path = os.path.join(
-                self.openvpn_config_path,
-                f"{safe_name}_{int(time.time())}.ovpn"
+            formatter = logging.Formatter(
+                '%(asctime)s [%(levelname)s] %(message)s',
+                datefmt='%H:%M:%S'
             )
             
-            with open(config_path, 'w', encoding='utf-8') as f:
-                f.write(config_data['content'])
-                
-            self.logger.info(f"Сохранен конфиг: {config_path}")
-            return config_path
+            # Console handler only for simplicity
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(formatter)
+            
+            self.logger.handlers.clear()
+            self.logger.addHandler(console_handler)
+            
+            self.logger.info("KingzVPN Pro started")
             
         except Exception as e:
-            self.logger.error(f"Ошибка сохранения конфига: {e}")
-            return None
-            
-    def validate_config_content(self, config_data):
-        """Проверяет содержимое конфига на валидность"""
-        try:
-            config_type = config_data.get('type', '').lower()
-            content = config_data.get('content', '')
-            
-            if not content:
-                return False
-                
-            if config_type == 'openvpn':
-                # Проверяем основные директивы OpenVPN
-                required = ['client', 'remote', 'proto']
-                return all(x in content.lower() for x in required)
-                
-            elif config_type == 'vmess':
-                # Для VMess проверяем JSON структуру
-                if 'vmess://' in content:
-                    vmess_data = content.split('vmess://')[1]
-                    try:
-                        decoded = base64.b64decode(vmess_data + '=' * (-len(vmess_data) % 4))
-                        json.loads(decoded)
-                        return True
-                    except:
-                        return False
-                        
-            elif config_type == 'shadowsocks':
-                # Проверяем формат SS URL
-                return bool(re.match(r'ss://[A-Za-z0-9+/=]+@[\w\-\.]+:\d+', content))
-                
-            elif config_type == 'trojan':
-                # Проверяем формат Trojan URL
-                return bool(re.match(r'trojan://[^@]+@[\w\-\.]+:\d+', content))
-                
-            elif config_type == 'json_config':
-                # Проверяем что это валидный JSON
-                try:
-                    json.loads(content)
-                    return True
-                except:
-                    return False
-                    
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Ошибка валидации конфига: {e}")
-            return False
-            
-    def create_config_card(self, config):
-        """Создает карточку конфигурации в UI"""
-        card = ctk.CTkFrame(
-            self.configs_scrollable,
-            corner_radius=15,
-            fg_color=self.colors["card_bg"]
-        )
-        card.pack(fill="x", pady=5, padx=5)
-        
-        content_frame = ctk.CTkFrame(card, fg_color="transparent")
-        content_frame.pack(fill="x", padx=20, pady=15)
-        
-        # Информация о конфиге
-        info_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        info_frame.pack(side="left", fill="x", expand=True)
-        
-        ctk.CTkLabel(
-            info_frame,
-            text=config['name'],
-            font=("Arial", 14, "bold")
-        ).pack(anchor="w")
-        
-        ctk.CTkLabel(
-            info_frame,
-            text=f"Тип: {config['type']} • {config['imported_at']}",
-            font=("Arial", 11),
-            text_color="gray"
-        ).pack(anchor="w", pady=(2, 0))
-        
-        # Кнопки действий
-        actions_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        actions_frame.pack(side="right")
-        
-        ctk.CTkButton(
-            actions_frame,
-            text="Подключить",
-            width=100,
-            fg_color=self.colors["primary"],
-            command=lambda c=config: self.connect_to_config(c)
-        ).pack(side="left", padx=(0, 5))
-        
-        ctk.CTkButton(
-            actions_frame,
-            text="Удалить",
-            width=100,
-            fg_color=self.colors["danger"],
-            command=lambda c=config, card=card: self.delete_config(c, card)
-        ).pack(side="left")
-        
-    def connect_to_config(self, config):
-        self.current_config = config
-        self.connect_vpn()
-        
-    def check_openvpn_installed(self) -> bool:
-        """Проверяет наличие OpenVPN в системе"""
-        try:
-            result = subprocess_check_output(['openvpn', '--version'], 
-                                          stderr=STDOUT, timeout=2).decode()
-            self.logger.info(f"OpenVPN version: {result.splitlines()[0]}")
-            return True
-        except Exception as e:
-            self.logger.error(f"OpenVPN not found: {e}")
-            return False
-            
-    def cleanup_old_configs(self, max_age_days: int = 7) -> None:
-        """Удаляет старые конфиги"""
-        try:
-            now = time.time()
-            for root, _, files in os.walk(CONFIG_DIR):
-                for f in files:
-                    if not f.endswith('.ovpn'):
-                        continue
-                    fpath = os.path.join(root, f)
-                    if now - os.path.getmtime(fpath) > max_age_days * 86400:
-                        try:
-                            os.remove(fpath)
-                            self.logger.info(f"Removed old config: {f}")
-                        except OSError as e:
-                            self.logger.error(f"Failed to remove {f}: {e}")
-        except Exception as e:
-            self.logger.error(f"Cleanup error: {e}")
-            
-    def connect_vpn(self):
-        """Инициирует подключение к VPN"""
-        if not self.current_config:
-            self.show_notification("Выберите конфигурацию", "warning")
-            return
-            
-        # Проверка OpenVPN
-        if not self.check_openvpn_installed():
-            self.show_notification("OpenVPN не установлен!", "error")
-            return
-            
-        # Защита от множественных попыток подключения
-        if not self.connection_lock.acquire(blocking=False):
-            self.logger.warning("Подключение уже в процессе")
-            self.show_notification("Подключение уже выполняется", "warning")
-            return
-            
-        # Очистка старых конфигов при подключении
-        self.cleanup_old_configs()
-            
-        try:
-            if self.is_connected:
-                self.disconnect_vpn()
-                return
-                
-            self.is_connected = True
-            self.connect_button.configure(
-                text="ОТКЛЮЧИТЬСЯ",
-                fg_color=self.colors["danger"],
-                hover_color="#ff5252",
-                state="disabled"  # Блокируем на время подключения
-            )
-            
-            self.connection_status.configure(
-                text="Подключение...",
-                text_color=self.colors["warning"]
-            )
-            
-            self.status_indicator.configure(
-                text="● ПОДКЛЮЧЕНИЕ...",
-                text_color=self.colors["warning"]
-            )
-            
-            self.progress_bar.start()
-            
-            # Подготавливаем конфиг
-            config_path = self.prepare_vpn_config(self.current_config)
-            if not config_path:
-                raise Exception("Не удалось подготовить конфигурацию")
-                
-            # Запускаем OpenVPN
-            cmd = [
-                'openvpn',  # Предполагается что OpenVPN установлен и доступен в PATH
-                '--config', config_path,
-                '--auth-nocache'  # Не кэшировать пароли
-            ]
-            
-            self.logger.info(f"Запуск OpenVPN: {' '.join(cmd)}")
-            
-            process = Popen(
-                cmd,
-                stdout=PIPE,
-                stderr=STDOUT,
-                bufsize=1,
-                universal_newlines=False
-            )
-            
-            self.vpn_process = process
-            
-            # Запускаем мониторинг процесса в отдельном потоке
-            monitor_thread = threading.Thread(
-                target=self.monitor_vpn_process,
-                args=(process,),
-                daemon=True
-            )
-            monitor_thread.start()
-            
-            # Сохраняем поток для возможности остановки
-            self.active_threads['process'] = monitor_thread
-            
-            # Запускаем мониторинг статистики
-            self.stats_stop_event.clear()  # Сбрасываем event остановки
-            stats_thread = threading.Thread(target=self.start_stats_monitor, daemon=True)
-            stats_thread.start()
-            self.active_threads['stats'] = stats_thread
-            
-        except Exception as e:
-            self.logger.error(f"Ошибка подключения: {e}")
-            self.show_notification(f"Ошибка: {str(e)}", "error")
-            self.disconnect_vpn()
-        finally:
-            self.connect_button.configure(state="normal")
-            self.connection_lock.release()
-        
-    def disconnect_vpn(self):
-        """Отключает VPN соединение с корректной очисткой ресурсов"""
-        self.logger.info("Отключение VPN...")
-        
-        # Останавливаем все мониторинги
-        for event_name in self.events:
-            self.events[event_name].set()
-        
-        # Останавливаем процесс OpenVPN если он запущен
-        if self.vpn_process:
-            try:
-                self.vpn_process.terminate()
-                try:
-                    self.vpn_process.wait(timeout=5)
-                except TimeoutExpired:
-                    self.logger.warning("OpenVPN process not responding, forcing kill")
-                    self.vpn_process.kill()
-            except Exception as e:
-                self.logger.error(f"Error stopping OpenVPN process: {e}")
-            finally:
-                self.vpn_process = None
-                
-        # Останавливаем все активные потоки
-        for thread_name, thread in self.active_threads.items():
-            if thread and thread.is_alive():
-                self.logger.info(f"Waiting for thread {thread_name} to finish")
-                try:
-                    thread.join(timeout=2)
-                    if thread.is_alive():
-                        self.logger.warning(f"Thread {thread_name} did not finish in time")
-                except Exception as e:
-                    self.logger.error(f"Error joining thread {thread_name}: {e}")
-                
-        # Очищаем все потоки
-        self.active_threads = {k: None for k in self.active_threads}
-        
-        # Очищаем очередь статистики
-        try:
-            while not self.stats_queue.empty():
-                self.stats_queue.get_nowait()
-        except Exception as e:
-            self.logger.error(f"Error clearing stats queue: {e}")
-            
-        self.is_connected = False
-        
-        # Безопасно обновляем UI
-        self.safe_ui_update(
-            self.connect_button,
-            text="ПОДКЛЮЧИТЬСЯ",
-            fg_color=self.colors["primary"],
-            hover_color="#1f6b4a"
-        )
-        
-        self.safe_ui_update(
-            self.connection_status,
-            text="Отключено",
-            text_color="gray"
-        )
-        
-        self.safe_ui_update(
-            self.status_indicator,
-            text="● ОФФЛАЙН", 
-            text_color=self.colors["danger"]
-        )
-        
-        # Сбрасываем прогресс
-        self.progress_bar.stop()
-        self.progress_bar.set(0)
-        
-        # Сбрасываем статистику безопасно
-        for widget in self.speed_widgets.values():
-            if widget and widget.winfo_exists():
-                self.safe_ui_update(widget, text="0")
-        
-        self.show_notification("VPN отключен", "info")
-        self.logger.info("VPN отключен")
-        
-    def toggle_connection(self):
-        """Переключает состояние подключения"""
-        if not self.is_connected:
-            self.connect_vpn()
-        else:
-            self.disconnect_vpn()
-            
-    def update_connection_status(self, status, progress=None):
-        """Обновляет статус подключения в UI"""
-        self.connection_status.configure(text=status)
-        if progress is not None:
-            self.progress_bar.set(progress)
-        
-    def connection_success(self):
-        """Обрабатывает успешное подключение"""
-        self.logger.info("VPN подключение установлено")
-        
-        self.connection_status.configure(
-            text="Защищено ✓",
-            text_color=self.colors["success"]
-        )
-        
-        self.status_indicator.configure(
-            text="● ОНЛАЙН",
-            text_color=self.colors["success"] 
-        )
-        
-        self.progress_bar.set(1.0)
-        self.progress_bar.stop()
-        
-        self.show_notification("VPN успешно подключен!", "success")
-        
-    def start_stats_monitor(self) -> None:
-        """Запускает мониторинг сетевой статистики с защитой от ошибок"""
-        self.logger.info("Запуск мониторинга статистики")
-        
-        try:
-            # Получаем начальные значения счетчиков
-            net_io = psutil.net_io_counters()
-            last_bytes = {
-                'sent': net_io.bytes_sent,
-                'recv': net_io.bytes_recv
-            }
-            last_time = time.time()
-            
-            while not self.events['stats_stop'].is_set():
-                try:
-                    current_time = time.time()
-                    interval = max(current_time - last_time, 0.1)  # Защита от деления на 0
-                    
-                    # Получаем текущие значения с защитой от ошибок
-                    try:
-                        counters = psutil.net_io_counters()
-                        current_bytes = {
-                            'sent': counters.bytes_sent,
-                            'recv': counters.bytes_recv
-                        }
-                    except Exception as e:
-                        self.logger.error(f"Failed to get network counters: {e}")
-                        time.sleep(1)
-                        continue
-                    
-                    # Считаем скорость с проверкой переполнения
-                    speeds = {}
-                    for direction in ['sent', 'recv']:
-                        byte_diff = current_bytes[direction] - last_bytes[direction]
-                        if byte_diff < 0:  # Counter overflow
-                            byte_diff = current_bytes[direction]
-                        speeds[direction] = (byte_diff * 8) / (1024 * 1024 * interval)
-                    
-                    # Измеряем пинг асинхронно
-                    ping_ms = self.measure_ping()
-                    
-                    # Отправляем данные в очередь для обновления UI
-                    stats_data = {
-                        'download': speeds['recv'],
-                        'upload': speeds['sent'],
-                        'ping': ping_ms
-                    }
-                    
-                    try:
-                        self.stats_queue.put_nowait(stats_data)
-                        self.app.after(0, self.process_stats_queue)
-                    except Exception as e:
-                        self.logger.error(f"Failed to queue stats update: {e}")
-                    
-                    # Обновляем значения для следующей итерации
-                    last_bytes = current_bytes.copy()
-                    last_time = current_time
-                    
-                except Exception as e:
-                    self.logger.error(f"Stats monitor iteration error: {e}")
-                    
-                time.sleep(1)
-                
-        except Exception as e:
-            self.logger.error(f"Stats monitor critical error: {e}")
-        finally:
-            self.logger.info("Stats monitor stopped")
-            
-    def measure_ping(self) -> int:
-        """Измеряет пинг до Google DNS с защитой от ошибок"""
-        try:
-            ping_output = subprocess_check_output(
-                ['ping', '-n', '1', '8.8.8.8'],
-                stderr=STDOUT,
-                timeout=2
-            ).decode('utf-8', errors='ignore')
-            
-            match = re.search(r'время=(\d+)мс', ping_output)
-            if match:
-                return int(match.group(1))
-        except Exception as e:
-            self.logger.debug(f"Ping measurement failed: {e}")
-        return 0
-        
-    def process_stats_queue(self) -> None:
-        """Обрабатывает очередь обновлений статистики"""
-        try:
-            while not self.stats_queue.empty():
-                stats = self.stats_queue.get_nowait()
-                if stats:
-                    self.update_speed_stats(
-                        stats['download'],
-                        stats['upload'],
-                        stats['ping']
-                    )
-        except Exception as e:
-            self.logger.error(f"Failed to process stats queue: {e}")
-            
-    def update_speed_stats(self, download: float, upload: float, ping: int) -> None:
-        """Thread-safe обновление статистики в UI"""
-        try:
-            updates = {
-                'download': f"{download:.1f}",
-                'upload': f"{upload:.1f}",
-                'ping': str(ping)
-            }
-            
-            for key, value in updates.items():
-                widget = self.speed_widgets.get(key)
-                if widget and widget.winfo_exists():
-                    self.safe_ui_update(widget, text=value)
-                    
-        except Exception as e:
-            self.logger.error(f"Failed to update speed stats: {e}")
-        
-    def start_speed_test(self):
-        self.show_notification("Запуск теста скорости...", "info")
-        # Имитация теста скорости
-        threading.Thread(target=self.simulate_speed_test, daemon=True).start()
-        
-    def simulate_speed_test(self):
-        for i in range(101):
-            time.sleep(0.03)
-            self.app.after(0, self.progress_bar.set, i/100)
-            
-        time.sleep(1)
-        self.app.after(0, self.progress_bar.set, 0)
-        self.app.after(0, lambda: self.show_notification("Тест скорости завершен!", "success"))
-        
-    def load_ip_info(self):
-        try:
-            response = requests.get('https://api.ipify.org', timeout=5)
-            ip = response.text
-            self.app.after(0, self.ip_label.configure, {"text": f"IP: {ip}"})
-        except:
-            self.app.after(0, self.ip_label.configure, {"text": "IP: Недоступно"})
-            
-    def show_notification(self, message: str, type_: str = "info", duration: int = 3000) -> None:
-        """Thread-safe метод показа уведомлений с защитой от ошибок"""
-        if not isinstance(message, str):
-            self.logger.error(f"Invalid notification message type: {type(message)}")
-            return
-            
-        def create_notification():
-            try:
-                # Создаем временное уведомление
-                notification = ctk.CTkFrame(
-                    self.app,
-                    corner_radius=10,
-                    fg_color={
-                        "success": self.colors["success"],
-                        "error": self.colors["danger"], 
-                        "warning": self.colors["warning"],
-                        "info": self.colors["secondary"]
-                    }.get(type_, self.colors["secondary"])  # Safe default
-                )
-                
-                try:
-                    notification.place(relx=0.5, rely=0.1, anchor="center")
-                except Exception as e:
-                    self.logger.error(f"Failed to place notification: {e}")
-                    return
-                
-                label = ctk.CTkLabel(
-                    notification,
-                    text=message[:200],  # Ограничиваем длину сообщения
-                    text_color="white",
-                    font=("Arial", 12)
-                )
-                label.pack(padx=20, pady=10)
-                
-                # Логируем уведомление
-                log_level = {
-                    "success": logging.INFO,
-                    "error": logging.ERROR,
-                    "warning": logging.WARNING,
-                    "info": logging.INFO
-                }.get(type_, logging.INFO)
-                
-                self.logger.log(log_level, f"Notification [{type_}]: {message}")
-                
-                # Автоскрытие через указанное время
-                self.app.after(duration, lambda: self.safe_destroy(notification))
-                
-            except Exception as e:
-                self.logger.error(f"Failed to create notification: {e}")
-                
-        # Запускаем создание уведомления в основном потоке
-        if threading.current_thread() is threading.main_thread():
-            create_notification()
-        else:
-            self.app.after(0, create_notification)
-        
-    def delete_config(self, config, card):
-        self.configs.remove(config)
-        card.destroy()
-        self.show_notification("Конфигурация удалена", "info")
-        
-    def log(self, message):
-        print(f"[VPN] {message}")
-        
+            print(f"Logging setup failed: {e}")
+            self.logger = logging.getLogger('KingzVPNPro')
+
     def run(self):
-        self.app.mainloop()
+        """Run the application"""
+        try:
+            self.logger.info("Starting KingzVPN Pro")
+            self.app.mainloop()
+            
+        except Exception as e:
+            self.logger.error(f"Application failed: {e}")
+        finally:
+            self.cleanup()
 
-# Запуск приложения
-if __name__ == "__main__":
-    import random  # Добавляем для имитации статистики
+    def cleanup(self):
+        """Cleanup resources"""
+        try:
+            # Stop all threads
+            for event in self.events.values():
+                event.set()
+                
+            # Close database
+            if hasattr(self, 'db_conn'):
+                self.db_conn.close()
+                
+            self.logger.info("Application cleanup completed")
+            
+        except Exception as e:
+            self.logger.error(f"Cleanup failed: {e}")
+
+# ===== MAIN EXECUTION =====
+def main():
+    print("🎯 KingzVPN Pro - Advanced VPN Client")
+    print("=" * 50)
     
-    vpn_app = ModernVPNClient()
-    vpn_app.run()
+    # Check command line arguments
+    auto_install = '--no-install' not in sys.argv
+    
+    if auto_install:
+        print("🔍 Auto-installation enabled")
+    else:
+        print("🔍 Auto-installation disabled")
+    
+    try:
+        # Create and run application
+        vpn_app = AdvancedVPNClient(auto_install_deps=auto_install)
+        vpn_app.run()
+        
+    except KeyboardInterrupt:
+        print("\n👋 Application interrupted by user")
+    except Exception as e:
+        print(f"💥 Critical error: {e}")
+        input("Press Enter to exit...")
+
+if __name__ == "__main__":
+    main()
